@@ -100,72 +100,121 @@ def collect_place_data(place_name, area=""):
 
 def save_place_data(place_data, category="카페"):
     """
-    수집된 데이터를 Markdown 파일로 저장합니다.
+    수집된 데이터를 AI 최적화 구조로 저장합니다.
+    - 고정된 섹션 구조 (AI가 항상 같은 위치에서 정보를 찾음)
+    - 메뉴/가격은 표로 분리 (수치 명확화)
+    - 키워드는 태그로 분리 (검색 최적화)
+    - 출처/날짜 명시 (신뢰도 확보)
     """
     area = place_data["area"] or "기타"
     save_dir = os.path.join(DATA_DIR, category, area)
     os.makedirs(save_dir, exist_ok=True)
 
-    # 파일명 생성 (특수문자 제거)
     safe_name = place_data["name"].replace(" ", "_")
     filepath = os.path.join(save_dir, f"{safe_name}.md")
 
-    # Markdown 작성
+    # 기본 정보 추출
+    info = place_data["local_info"][0] if place_data["local_info"] else {}
+
+    # 리뷰에서 가격 패턴 추출 (예: "앙버터 3,800원")
+    import re
+    price_pattern = re.compile(r'([가-힣a-zA-Z\s]{2,10})\s*([\d,]+)\s*원')
+    extracted_prices = []
+    for review in place_data["blog_reviews"]:
+        matches = price_pattern.findall(review["description"])
+        for menu, price in matches:
+            menu = menu.strip()
+            if len(menu) >= 2 and menu not in [m[0] for m in extracted_prices]:
+                extracted_prices.append((menu, price + "원",
+                    review["postdate"], review["link"]))
+
+    # 리뷰에서 키워드 추출 (자주 등장하는 명사)
+    all_text = " ".join([r["description"] for r in place_data["blog_reviews"]])
+    keyword_candidates = re.findall(r'[가-힣]{2,5}', all_text)
+    from collections import Counter
+    stop_words = {"이번", "오늘", "우리", "그리고", "정말", "너무", "하지만", "있어", "있는",
+                  "없는", "이런", "저런", "이곳", "여기", "거기", "이미", "더욱", "또한"}
+    keyword_freq = Counter([w for w in keyword_candidates if w not in stop_words])
+    top_keywords = [kw for kw, _ in keyword_freq.most_common(10)]
+
+    # ── AI 최적화 MD 작성 ──
+    collected_date = place_data["collected_at"][:10]  # YYYY-MM-DD만
+
     md_content = f"""# {place_data['name']}
 
-- **분류:** {category}
-- **지역:** {area}
-- **수집일:** {place_data['collected_at']}
-- **출처:** {place_data['source']}
-
----
-
-## 📍 기본 정보 (네이버 지역 검색)
-
-"""
-    if place_data["local_info"]:
-        info = place_data["local_info"][0]  # 첫 번째 결과 사용
-        md_content += f"""| 항목 | 내용 |
+## 메타데이터
+| 항목 | 값 |
 |---|---|
-| **상호명** | {info['title']} |
-| **카테고리** | {info['category']} |
-| **도로명 주소** | {info['roadAddress']} |
-| **지번 주소** | {info['address']} |
-| **전화번호** | {info['telephone'] or '미확인'} |
-| **링크** | {info['link'] or '미확인'} |
-
-### 기타 검색 결과
-"""
-        for i, item in enumerate(place_data["local_info"][1:], 2):
-            md_content += f"- [{item['title']}]({item['link']}) - {item['category']}\n"
-    else:
-        md_content += "> 지역 검색 결과 없음\n"
-
-    md_content += f"""
+| **분류** | {category} |
+| **지역** | {area} |
+| **수집일** | {collected_date} |
+| **데이터출처** | {place_data['source']} |
+| **신뢰도** | 실제수집 (AI생성아님) |
 
 ---
 
-## 📝 블로그 리뷰 (최신 {len(place_data['blog_reviews'])}건)
+## 기본 정보
+| 항목 | 값 | 출처 |
+|---|---|---|
+| **상호명** | {info.get('title', '미확인')} | 네이버 지역검색 |
+| **카테고리** | {info.get('category', '미확인')} | 네이버 지역검색 |
+| **도로명 주소** | {info.get('roadAddress', '미확인')} | 네이버 지역검색 |
+| **전화번호** | {info.get('telephone', '미확인') or '미확인'} | 네이버 지역검색 |
+| **홈페이지** | {info.get('link', '미확인') or '미확인'} | 네이버 지역검색 |
+| **영업시간** | 미확인 | 추가수집필요 |
+| **주차** | 미확인 | 추가수집필요 |
+| **평점** | 미확인 | 추가수집필요 |
 
+---
+
+## 메뉴 및 가격
+*(리뷰에서 자동 추출 — 실제 가격과 다를 수 있으니 검증 필요)*
+
+| 메뉴명 | 가격 | 확인날짜 | 출처 |
+|---|---|---|---|
 """
-    if place_data["blog_reviews"]:
-        for i, review in enumerate(place_data["blog_reviews"], 1):
-            md_content += f"""### 리뷰 {i}: {review['title']}
-> {review['description'][:200]}...
-
-- 🔗 [원문 링크]({review['link']})
-- 📅 {review['postdate']}
-
-"""
+    if extracted_prices:
+        for menu, price, date, link in extracted_prices[:10]:
+            md_content += f"| {menu} | {price} | {date} | [블로그]({link}) |\n"
     else:
-        md_content += "> 블로그 리뷰 없음\n"
+        md_content += "| 미확인 | 미확인 | - | 추가수집필요 |\n"
 
     md_content += f"""
 ---
 
-## 🏷️ 태그
+## 키워드 분석
+*(리뷰 {len(place_data['blog_reviews'])}건에서 자동 추출)*
 
-#{category} #{area} #{place_data['name'].replace(' ', '')}
+### 자주 등장한 단어
+{" ".join([f"#{kw}" for kw in top_keywords]) if top_keywords else "#키워드없음"}
+
+### 분위기 키워드
+- 미확인 (리뷰 분석 후 수동 추가 권장)
+
+### 추천 대상
+- 미확인 (리뷰 분석 후 수동 추가 권장)
+
+---
+
+## 블로그 리뷰 원문
+*(최신 {len(place_data['blog_reviews'])}건)*
+
+"""
+    for i, review in enumerate(place_data["blog_reviews"], 1):
+        md_content += f"""### [{i}] {review['title']}
+- **날짜:** {review['postdate']}
+- **링크:** {review['link']}
+- **요약:** {review['description'][:300]}
+
+"""
+
+    md_content += f"""---
+
+## 연관 노드 (지식 그래프)
+[[{category}]] [[{area}]] {" ".join([f"[[{kw}]]" for kw in top_keywords[:5]])}
+
+---
+> 수집일: {collected_date} | 출처: 네이버 검색 API | AI생성: 아니오
 """
 
     with open(filepath, "w", encoding="utf-8") as f:
